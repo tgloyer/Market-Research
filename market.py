@@ -10,6 +10,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import Ridge
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import GradientBoostingRegressor
 
 daily_bars = pd.read_csv("data/spy_daily.csv")
 daily_bars["timestamp"] = pd.to_datetime(daily_bars["timestamp"], utc= True)
@@ -164,8 +165,10 @@ train_data = data[(data.index >= pd.to_datetime("2020, 1, 1").date()) &(data.ind
 X = train_data[feature_columns]
 y = train_data["target_return"]
 
-model = RandomForestRegressor(n_estimators=200,random_state=42)
-
+model = make_pipeline(
+    StandardScaler(),
+    Ridge(alpha=1.0)
+)
 model.fit(X, y)
 
-joblib.dump(model, "spy_model_morning.pkl")
+joblib.dump(model, "spy_model_ridge.pkl")

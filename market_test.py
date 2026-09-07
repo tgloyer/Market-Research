@@ -8,6 +8,10 @@ from datetime import datetime
 from dotenv import load_dotenv
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error
+from sklearn.linear_model import Ridge
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import GradientBoostingRegressor
 
 daily_bars = pd.read_csv("data/spy_daily.csv")
 daily_bars["timestamp"] = pd.to_datetime(daily_bars["timestamp"], utc= True)
@@ -158,7 +162,7 @@ test_data = data[(data.index >= pd.to_datetime("2023-01-01").date()) & (data.ind
 X_test = test_data[feature_columns]
 y_test = test_data["target_return"]
 
-model = joblib.load("spy_model_morning.pkl")
+model = joblib.load("spy_model_ridge.pkl")
 
 predictions = model.predict(X_test)
 mae = mean_absolute_error(y_test, predictions)
