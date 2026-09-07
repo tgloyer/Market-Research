@@ -114,7 +114,7 @@ close_price = minute_bars[
 target_return = close_price / entry_price - 1
 target = "target_return"
 feature_columns = [
-    
+
     "gap_return",
     "first_hour_return",
     "second_hour_return",
@@ -156,7 +156,7 @@ morning_features = pd.DataFrame({
     "close_position_in_morning_range": close_position_in_morning_range
 })
 previous_day_features = daily_bars[daily_feature_columns]
-data = pd.concat([ morning_features, target_return.rename("target_return")], axis=1)
+data = pd.concat([previous_day_features, morning_features, target_return.rename("target_return")], axis=1)
 data = data[feature_columns + [target]].dropna()
 test_data = data[(data.index >= pd.to_datetime("2023-01-01").date()) & (data.index <= pd.to_datetime("2024-12-31").date())]
 X_test = test_data[feature_columns]

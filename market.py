@@ -167,7 +167,7 @@ y = train_data["target_return"]
 
 model = make_pipeline(
     StandardScaler(),
-    Ridge(alpha=1.0)
+    Ridge(alpha=0.1)
 )
 model.fit(X, y)
 
