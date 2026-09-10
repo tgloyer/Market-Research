@@ -1,0 +1,744 @@
+
+# ==========================================
+# DYNAMIC STOP RESEARCH — STEP 1
+# PREDICTED RETURN vs MAE
+# ==========================================
+
+
+# ==========================================
+# GET AFTERNOON DATA
+# ==========================================
+
+afternoon = minute_bars[
+    (minute_bars["time"] >= pd.to_datetime("11:30").time()) &
+    (minute_bars["time"] < pd.to_datetime("16:00").time())
+].copy()
+
+
+# ==========================================
+# GET ENTRY PRICE
+# ==========================================
+
+entry_prices = (
+    afternoon[
+        afternoon["time"] == pd.to_datetime("11:30").time()
+    ]
+    .groupby("date")["open"]
+    .first()
+)
+
+results["entry_price"] = entry_prices
+
+
+# ==========================================
+# GET AFTERNOON HIGH / LOW
+# ==========================================
+
+afternoon_high = (
+    afternoon
+    .groupby("date")["high"]
+    .max()
+)
+
+afternoon_low = (
+    afternoon
+    .groupby("date")["low"]
+    .min()
+)
+
+
+results["afternoon_high"] = afternoon_high
+results["afternoon_low"] = afternoon_low
+
+
+# ==========================================
+# CALCULATE MFE
+# ==========================================
+
+results["mfe"] = np.where(
+    results["position"] == 1,
+
+    (results["afternoon_high"] /
+     results["entry_price"]) - 1,
+
+    (results["entry_price"] /
+     results["afternoon_low"]) - 1
+)
+
+
+# ==========================================
+# CALCULATE MAE
+# ==========================================
+
+results["mae"] = np.where(
+    results["position"] == 1,
+
+    (results["afternoon_low"] /
+     results["entry_price"]) - 1,
+
+    (results["entry_price"] /
+     results["afternoon_high"]) - 1
+)
+
+
+# ==========================================
+# CREATE PREDICTION BUCKETS
+# ==========================================
+
+results["prediction_bucket"] = pd.cut(
+
+    results["predicted_return"],
+
+    bins=[
+        -np.inf,
+        -0.0030,
+        -0.0015,
+        0,
+        0.0015,
+        0.0030,
+        np.inf
+    ],
+
+    labels=[
+        "< -0.30%",
+        "-0.30% to -0.15%",
+        "-0.15% to 0%",
+        "0% to +0.15%",
+        "+0.15% to +0.30%",
+        "> +0.30%"
+    ]
+)
+
+
+# ==========================================
+# OVERALL ANALYSIS
+# ==========================================
+
+print("\n==========================================")
+print("PREDICTED RETURN vs MAE")
+print("==========================================")
+
+
+for bucket, group in results.groupby(
+    "prediction_bucket",
+    observed=False
+):
+
+    print(f"\nPrediction: {bucket}")
+
+    print(
+        f"Trades: {len(group)}"
+    )
+
+    print(
+        f"Win rate: "
+        f"{(group['target_return'] > 0).mean():.2%}"
+    )
+
+    print(
+        f"Average MAE: "
+        f"{group['mae'].mean():.2%}"
+    )
+
+    print(
+        f"Median MAE: "
+        f"{group['mae'].median():.2%}"
+    )
+
+    print(
+        f"75th percentile MAE: "
+        f"{group['mae'].quantile(0.75):.2%}"
+    )
+
+    print(
+        f"90th percentile MAE: "
+        f"{group['mae'].quantile(0.90):.2%}"
+    )
+
+    print(
+        f"Average MFE: "
+        f"{group['mfe'].mean():.2%}"
+    )
+
+    print(
+        f"Average final return: "
+        f"{group['target_return'].mean():.2%}"
+    )
+
+
+# ==========================================
+# WINNING TRADES
+# ==========================================
+
+print("\n==========================================")
+print("WINNING TRADES — MAE BY PREDICTION")
+print("==========================================")
+
+
+winning_trades = results[
+    results["target_return"] > 0
+]
+
+
+for bucket, group in winning_trades.groupby(
+    "prediction_bucket",
+    observed=False
+):
+
+    print(f"\nPrediction: {bucket}")
+
+    print(
+        f"Winning trades: {len(group)}"
+    )
+
+    print(
+        f"Average MAE: "
+        f"{group['mae'].mean():.2%}"
+    )
+
+    print(
+        f"Median MAE: "
+        f"{group['mae'].median():.2%}"
+    )
+
+    print(
+        f"75th percentile MAE: "
+        f"{group['mae'].quantile(0.75):.2%}"
+    )
+
+    print(
+        f"90th percentile MAE: "
+        f"{group['mae'].quantile(0.90):.2%}"
+    )
+
+    print(
+        f"Worst MAE: "
+        f"{group['mae'].min():.2%}"
+    )
+
+
+# ==========================================
+# LOSING TRADES
+# ==========================================
+
+print("\n==========================================")
+print("LOSING TRADES — MAE BY PREDICTION")
+print("==========================================")
+
+
+losing_trades = results[
+    results["target_return"] < 0
+]
+
+
+for bucket, group in losing_trades.groupby(
+    "prediction_bucket",
+    observed=False
+):
+
+    print(f"\nPrediction: {bucket}")
+
+    print(
+        f"Losing trades: {len(group)}"
+    )
+
+    print(
+        f"Average MAE: "
+        f"{group['mae'].mean():.2%}"
+    )
+
+    print(
+        f"Median MAE: "
+        f"{group['mae'].median():.2%}"
+    )
+
+    print(
+        f"75th percentile MAE: "
+        f"{group['mae'].quantile(0.75):.2%}"
+    )
+
+    print(
+        f"90th percentile MAE: "
+        f"{group['mae'].quantile(0.90):.2%}"
+    )
+
+    print(
+        f"Worst MAE: "
+        f"{group['mae'].min():.2%}"
+    )
+
+# ==========================================
+# DYNAMIC STOP RESEARCH — STEP 2
+# VOLATILITY vs TRADE MAE
+# ==========================================
+
+volatility_features = [
+    "morning_volatility",
+    "morning_range",
+    "first_hour_range",
+    "second_hour_range"
+]
+
+for feature in volatility_features:
+
+    print("\n\n==========================================")
+    print(f"{feature.upper()} vs MAE")
+    print("==========================================")
+
+    # Create 5 buckets containing roughly equal numbers of trades
+    results["volatility_bucket"] = pd.qcut(
+        results[feature],
+        q=5,
+        duplicates="drop"
+    )
+
+    # --------------------------------------
+    # ALL TRADES
+    # --------------------------------------
+
+    print("\n------------------------------------------")
+    print("ALL TRADES")
+    print("------------------------------------------")
+
+    for bucket, group in results.groupby(
+        "volatility_bucket",
+        observed=False
+    ):
+
+        print(f"\nVolatility: {bucket}")
+        print(f"Trades: {len(group)}")
+
+        print(
+            f"Average MAE: "
+            f"{group['mae'].mean():.2%}"
+        )
+
+        print(
+            f"Median MAE: "
+            f"{group['mae'].median():.2%}"
+        )
+
+        print(
+            f"75th percentile MAE: "
+            f"{group['mae'].quantile(0.75):.2%}"
+        )
+
+        print(
+            f"90th percentile MAE: "
+            f"{group['mae'].quantile(0.90):.2%}"
+        )
+
+        print(
+            f"Average MFE: "
+            f"{group['mfe'].mean():.2%}"
+        )
+
+    # --------------------------------------
+    # WINNING TRADES
+    # --------------------------------------
+
+    print("\n------------------------------------------")
+    print("WINNING TRADES")
+    print("------------------------------------------")
+
+    winning_trades = results[
+        results["target_return"] > 0
+    ]
+
+    for bucket, group in winning_trades.groupby(
+        "volatility_bucket",
+        observed=False
+    ):
+
+        print(f"\nVolatility: {bucket}")
+        print(f"Winning trades: {len(group)}")
+
+        print(
+            f"Average MAE: "
+            f"{group['mae'].mean():.2%}"
+        )
+
+        print(
+            f"Median MAE: "
+            f"{group['mae'].median():.2%}"
+        )
+
+        print(
+            f"75th percentile MAE: "
+            f"{group['mae'].quantile(0.75):.2%}"
+        )
+
+        print(
+            f"90th percentile MAE: "
+            f"{group['mae'].quantile(0.90):.2%}"
+        )
+
+        print(
+            f"Worst MAE: "
+            f"{group['mae'].min():.2%}"
+        )
+
+    # --------------------------------------
+    # LOSING TRADES
+    # --------------------------------------
+
+    print("\n------------------------------------------")
+    print("LOSING TRADES")
+    print("------------------------------------------")
+
+    losing_trades = results[
+        results["target_return"] < 0
+    ]
+
+    for bucket, group in losing_trades.groupby(
+        "volatility_bucket",
+        observed=False
+    ):
+
+        print(f"\nVolatility: {bucket}")
+        print(f"Losing trades: {len(group)}")
+
+        print(
+            f"Average MAE: "
+            f"{group['mae'].mean():.2%}"
+        )
+
+        print(
+            f"Median MAE: "
+            f"{group['mae'].median():.2%}"
+        )
+
+        print(
+            f"75th percentile MAE: "
+            f"{group['mae'].quantile(0.75):.2%}"
+        )
+
+        print(
+            f"90th percentile MAE: "
+            f"{group['mae'].quantile(0.90):.2%}"
+        )
+
+        print(
+            f"Worst MAE: "
+            f"{group['mae'].min():.2%}"
+        )
+# ==========================================
+# DYNAMIC STOP RESEARCH — STEP 3
+# MOMENTUM vs TRADE MAE
+# ==========================================
+
+momentum_features = [
+    "first_hour_return",
+    "morning_return"
+]
+
+for feature in momentum_features:
+
+    print("\n\n==========================================")
+    print(f"{feature.upper()} vs MAE")
+    print("==========================================")
+
+    results["momentum_bucket"] = pd.qcut(
+        results[feature],
+        q=5,
+        duplicates="drop"
+    )
+
+    # --------------------------------------
+    # ALL TRADES
+    # --------------------------------------
+
+    print("\n------------------------------------------")
+    print("ALL TRADES")
+    print("------------------------------------------")
+
+    for bucket, group in results.groupby(
+        "momentum_bucket",
+        observed=False
+    ):
+
+        print(f"\nMomentum: {bucket}")
+        print(f"Trades: {len(group)}")
+
+        print(
+            f"Average MAE: "
+            f"{group['mae'].mean():.2%}"
+        )
+
+        print(
+            f"Median MAE: "
+            f"{group['mae'].median():.2%}"
+        )
+
+        print(
+            f"75th percentile MAE: "
+            f"{group['mae'].quantile(0.75):.2%}"
+        )
+
+        print(
+            f"90th percentile MAE: "
+            f"{group['mae'].quantile(0.90):.2%}"
+        )
+
+        print(
+            f"Average MFE: "
+            f"{group['mfe'].mean():.2%}"
+        )
+
+        print(
+            f"Average final return: "
+            f"{group['target_return'].mean():.2%}"
+        )
+
+    # --------------------------------------
+    # WINNING TRADES
+    # --------------------------------------
+
+    print("\n------------------------------------------")
+    print("WINNING TRADES")
+    print("------------------------------------------")
+
+    winning_trades = results[
+        results["target_return"] > 0
+    ]
+
+    for bucket, group in winning_trades.groupby(
+        "momentum_bucket",
+        observed=False
+    ):
+
+        print(f"\nMomentum: {bucket}")
+        print(f"Winning trades: {len(group)}")
+
+        print(
+            f"Average MAE: "
+            f"{group['mae'].mean():.2%}"
+        )
+
+        print(
+            f"Median MAE: "
+            f"{group['mae'].median():.2%}"
+        )
+
+        print(
+            f"75th percentile MAE: "
+            f"{group['mae'].quantile(0.75):.2%}"
+        )
+
+        print(
+            f"90th percentile MAE: "
+            f"{group['mae'].quantile(0.90):.2%}"
+        )
+
+        print(
+            f"Worst MAE: "
+            f"{group['mae'].min():.2%}"
+        )
+
+    # --------------------------------------
+    # LOSING TRADES
+    # --------------------------------------
+
+    print("\n------------------------------------------")
+    print("LOSING TRADES")
+    print("------------------------------------------")
+
+    losing_trades = results[
+        results["target_return"] < 0
+    ]
+
+    for bucket, group in losing_trades.groupby(
+        "momentum_bucket",
+        observed=False
+    ):
+
+        print(f"\nMomentum: {bucket}")
+        print(f"Losing trades: {len(group)}")
+
+        print(
+            f"Average MAE: "
+            f"{group['mae'].mean():.2%}"
+        )
+
+        print(
+            f"Median MAE: "
+            f"{group['mae'].median():.2%}"
+        )
+
+        print(
+            f"75th percentile MAE: "
+            f"{group['mae'].quantile(0.75):.2%}"
+        )
+
+        print(
+            f"90th percentile MAE: "
+            f"{group['mae'].quantile(0.90):.2%}"
+        )
+
+        print(
+            f"Worst MAE: "
+            f"{group['mae'].min():.2%}"
+        )
+# ==========================================
+# DYNAMIC STOP RESEARCH — STEP 4
+# OTHER FEATURES vs TRADE MAE
+# ==========================================
+
+other_features = [
+    "price_vs_morning_vwap",
+    "close_position_in_morning_range",
+    "max_upside_from_open",
+    "max_downside_from_open"
+]
+
+for feature in other_features:
+
+    print("\n\n==========================================")
+    print(f"{feature.upper()} vs MAE")
+    print("==========================================")
+
+    # --------------------------------------
+    # CREATE BUCKETS
+    # --------------------------------------
+
+    results["other_bucket"] = pd.qcut(
+        results[feature],
+        q=5,
+        duplicates="drop"
+    )
+
+    # --------------------------------------
+    # ALL TRADES
+    # --------------------------------------
+
+    print("\n------------------------------------------")
+    print("ALL TRADES")
+    print("------------------------------------------")
+
+    for bucket, group in results.groupby(
+        "other_bucket",
+        observed=False
+    ):
+
+        print(f"\nFeature: {bucket}")
+        print(f"Trades: {len(group)}")
+
+        print(
+            f"Average MAE: "
+            f"{group['mae'].mean():.2%}"
+        )
+
+        print(
+            f"Median MAE: "
+            f"{group['mae'].median():.2%}"
+        )
+
+        print(
+            f"75th percentile MAE: "
+            f"{group['mae'].quantile(0.75):.2%}"
+        )
+
+        print(
+            f"90th percentile MAE: "
+            f"{group['mae'].quantile(0.90):.2%}"
+        )
+
+        print(
+            f"Average MFE: "
+            f"{group['mfe'].mean():.2%}"
+        )
+
+        print(
+            f"Average final return: "
+            f"{group['target_return'].mean():.2%}"
+        )
+
+    # --------------------------------------
+    # WINNING TRADES
+    # --------------------------------------
+
+    print("\n------------------------------------------")
+    print("WINNING TRADES")
+    print("------------------------------------------")
+
+    winning_trades = results[
+        results["target_return"] > 0
+    ]
+
+    for bucket, group in winning_trades.groupby(
+        "other_bucket",
+        observed=False
+    ):
+
+        print(f"\nFeature: {bucket}")
+        print(f"Winning trades: {len(group)}")
+
+        print(
+            f"Average MAE: "
+            f"{group['mae'].mean():.2%}"
+        )
+
+        print(
+            f"Median MAE: "
+            f"{group['mae'].median():.2%}"
+        )
+
+        print(
+            f"75th percentile MAE: "
+            f"{group['mae'].quantile(0.75):.2%}"
+        )
+
+        print(
+            f"90th percentile MAE: "
+            f"{group['mae'].quantile(0.90):.2%}"
+        )
+
+        print(
+            f"Worst MAE: "
+            f"{group['mae'].min():.2%}"
+        )
+
+    # --------------------------------------
+    # LOSING TRADES
+    # --------------------------------------
+
+    print("\n------------------------------------------")
+    print("LOSING TRADES")
+    print("------------------------------------------")
+
+    losing_trades = results[
+        results["target_return"] < 0
+    ]
+
+    for bucket, group in losing_trades.groupby(
+        "other_bucket",
+        observed=False
+    ):
+
+        print(f"\nFeature: {bucket}")
+        print(f"Losing trades: {len(group)}")
+
+        print(
+            f"Average MAE: "
+            f"{group['mae'].mean():.2%}"
+        )
+
+        print(
+            f"Median MAE: "
+            f"{group['mae'].median():.2%}"
+        )
+
+        print(
+            f"75th percentile MAE: "
+            f"{group['mae'].quantile(0.75):.2%}"
+        )
+
+        print(
+            f"90th percentile MAE: "
+            f"{group['mae'].quantile(0.90):.2%}"
+        )
+
+        print(
+            f"Worst MAE: "
+            f"{group['mae'].min():.2%}"
+        )

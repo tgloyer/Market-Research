@@ -157,6 +157,7 @@ close_price = minute_bars[
 ].groupby("date")["close"].last()
 
 
+
 # Target Return
 target_return = close_price / entry_price - 1
 target = "target_return"
@@ -234,6 +235,7 @@ predictions = model.predict(X_test)
 mae = mean_absolute_error(y_test, predictions)
 results = test_data.copy()
 results["predicted_return"] = predictions
+
 
 # =========================
 # BASIC TRADING BACKTEST
@@ -348,6 +350,30 @@ entry_prices = (
 
 results["entry_price"] = entry_prices
 
+
+# ============================================================
+# TRADE-RELATIVE MORNING FEATURES
+# ============================================================
+
+results["aligned_first_hour_return"] = (
+    results["position"] * results["first_hour_return"]
+)
+
+results["aligned_morning_return"] = (
+    results["position"] * results["morning_return"]
+)
+
+results["adverse_morning_move"] = np.where(
+    results["position"] == 1,
+    results["max_downside_from_open"],
+    -results["max_upside_from_open"]
+)
+
+results["favorable_morning_move"] = np.where(
+    results["position"] == 1,
+    results["max_upside_from_open"],
+    -results["max_downside_from_open"]
+)
 
 # =========================
 # ACTUAL STOP-LOSS BACKTEST
@@ -483,7 +509,155 @@ for stop in stop_levels:
         "worst_day": worst_day,
         "sharpe": sharpe_ratio
     })
+def backtest_stop(results, afternoon, stop_loss):
+    """
+    Backtest one stop-loss percentage.
 
+    Entry: 11:30 AM open
+    Exit: stop-loss or 4:00 PM close
+    """
+
+    output = results.copy()
+
+    stop_returns = []
+    stopped = []
+
+    for date, trade in output.iterrows():
+
+        entry_price = trade["entry_price"]
+        position = trade["position"]
+
+        day = afternoon[afternoon["date"] == date]
+
+        if day.empty:
+            stop_returns.append(np.nan)
+            stopped.append(False)
+            continue
+
+        if position == 1:
+            stop_price = entry_price * (1 - stop_loss)
+
+            stop_hit = day["low"] <= stop_price
+
+            if stop_hit.any():
+                stop_returns.append(-stop_loss)
+                stopped.append(True)
+            else:
+                final_price = day["close"].iloc[-1]
+
+                trade_return = (
+                    final_price / entry_price - 1
+                )
+
+                stop_returns.append(trade_return)
+                stopped.append(False)
+
+        else:
+            stop_price = entry_price * (1 + stop_loss)
+
+            stop_hit = day["high"] >= stop_price
+
+            if stop_hit.any():
+                stop_returns.append(-stop_loss)
+                stopped.append(True)
+            else:
+                final_price = day["close"].iloc[-1]
+
+                trade_return = (
+                    entry_price / final_price - 1
+                )
+
+                stop_returns.append(trade_return)
+                stopped.append(False)
+
+    output["strategy_return"] = stop_returns
+    output["stopped"] = stopped
+
+    return output
+strong_features = [
+    "aligned_first_hour_return",
+    "aligned_morning_return",
+    "adverse_morning_move"
+]
+
+stop_levels = [
+    None,
+    0.005,
+    0.0075,
+    0.01
+]
+for feature in strong_features:
+
+    print("\n")
+    print("=" * 70)
+    print(f"FEATURE: {feature}")
+    print("=" * 70)
+
+    results["feature_bucket"] = pd.qcut(
+        results[feature],
+        q=5,
+        duplicates="drop"
+    )
+
+    for bucket in results["feature_bucket"].dropna().unique():
+
+        bucket_data = results[
+            results["feature_bucket"] == bucket
+        ].copy()
+
+        print("\n" + "-" * 70)
+        print(f"BUCKET: {bucket}")
+        print(f"TRADES: {len(bucket_data)}")
+        print("-" * 70)
+
+        for stop in stop_levels:
+
+            if stop is None:
+
+                test = bucket_data.copy()
+
+                test["strategy_return"] = (
+                    test["position"] *
+                    test["target_return"]
+                )
+
+                stop_name = "No stop"
+
+            else:
+
+                test = backtest_stop(
+                    bucket_data,
+                    afternoon,
+                    stop
+                )
+
+                stop_name = f"{stop:.2%} stop"
+
+            total_return = (
+                (1 + test["strategy_return"]).prod() - 1
+            )
+
+            win_rate = (
+                test["strategy_return"] > 0
+            ).mean()
+
+            average_return = (
+                test["strategy_return"].mean()
+            )
+
+            stopped_trades = (
+                test["stopped"].sum()
+                if "stopped" in test.columns
+                else 0
+            )
+
+            print(
+                f"{stop_name:<12} | "
+                f"Return: {total_return:>7.2%} | "
+                f"Win: {win_rate:>6.2%} | "
+                f"Avg: {average_return:>7.3%} | "
+                f"Stopped: {stopped_trades}"
+            )
 
 # =========================
 # PRINT RESULTS
@@ -722,80 +896,6 @@ print(
     f"Average MAE: "
     f"{losing_trades['mae'].mean():.2%}"
 )
-
-# =========================
-# STOP-LOSS ANALYSIS
-# =========================
-
-stop_levels = [
-    0.0010,   # 0.10%
-    0.0020,   # 0.20%
-    0.0025,   # 0.25%
-    0.0030,   # 0.30%
-    0.0040,   # 0.40%
-    0.0050,   # 0.50%
-    0.0075,   # 0.75%
-    0.0100,   # 1.00%
-    0.0150,   # 1.50%
-    0.0200    # 2.00%
-]
-
-print("\n===== STOP-LOSS ANALYSIS =====")
-
-for stop in stop_levels:
-
-    # A trade hits the stop if its MAE is
-    # worse than the stop level.
-    stopped_out = results["mae"] <= -stop
-
-    total_stopped = stopped_out.sum()
-
-    winning_stopped = (
-        stopped_out &
-        (results["strategy_return"] > 0)
-    ).sum()
-
-    losing_stopped = (
-        stopped_out &
-        (results["strategy_return"] < 0)
-    ).sum()
-
-    total_winners = (
-        results["strategy_return"] > 0
-    ).sum()
-
-    total_losers = (
-        results["strategy_return"] < 0
-    ).sum()
-
-    winner_stop_rate = (
-        winning_stopped / total_winners
-    )
-
-    loser_stop_rate = (
-        losing_stopped / total_losers
-    )
-
-    print(f"\nStop-loss: {stop:.2%}")
-
-    print(
-        f"Total trades stopped: "
-        f"{total_stopped} / {len(results)}"
-    )
-
-    print(
-        f"Winners stopped: "
-        f"{winning_stopped} / {total_winners} "
-        f"({winner_stop_rate:.2%})"
-    )
-
-    print(
-        f"Losers stopped: "
-        f"{losing_stopped} / {total_losers} "
-        f"({loser_stop_rate:.2%})"
-    )
-    
-print(results[["target_return","predicted_return"]].head(20))
 
 actual_direction = y_test > 0
 predicted_direction = predictions > 0
