@@ -156,6 +156,7 @@ close_price = minute_bars[
     minute_bars["time"] == pd.to_datetime("16:00").time()
 ].groupby("date")["close"].last()
 
+
 # Target Return
 target_return = close_price / entry_price - 1
 target = "target_return"
@@ -235,40 +236,565 @@ results = test_data.copy()
 results["predicted_return"] = predictions
 
 # =========================
-# TRADING BACKTEST
+# BASIC TRADING BACKTEST
 # =========================
+
 # Long if prediction is positive
 # Short if prediction is negative
 
 results["position"] = np.where(
-    results["predicted_return"] > 0,1,-1)
+    results["predicted_return"] > 0,
+    1,
+    -1
+)
 
 # Strategy return
-results["strategy_return"] = (results["position"] * results["target_return"])
+results["strategy_return"] = (
+    results["position"] *
+    results["target_return"]
+)
 
-# Cumulative strategy value
+# Starting capital
 initial_capital = 10000
 
-results["strategy_value"] = (initial_capital *(1 + results["strategy_return"]).cumprod())
+# Equity curve
+results["equity"] = (
+    initial_capital *
+    (1 + results["strategy_return"]).cumprod()
+)
 
-# Buy-and-hold comparison
-results["buy_hold_value"] = (initial_capital *(1 + results["target_return"]).cumprod())
+# Running maximum
+results["running_max"] = (
+    results["equity"].cummax()
+)
+
+# Drawdown
+results["drawdown"] = (
+    results["equity"] /
+    results["running_max"] - 1
+)
+
+# =========================
+# PERFORMANCE
+# =========================
+
+final_value = results["equity"].iloc[-1]
+
+total_return = (
+    final_value / initial_capital - 1
+)
+
+win_rate = (
+    results["strategy_return"] > 0
+).mean()
+
+# =========================
+# RISK METRICS
+# =========================
+
+max_drawdown = results["drawdown"].min()
+
+average_daily_return = (
+    results["strategy_return"].mean()
+)
+
+daily_volatility = (
+    results["strategy_return"].std()
+)
+
+sharpe_ratio = (
+    average_daily_return /
+    daily_volatility
+) * np.sqrt(252)
+
+# =========================
+# ADDITIONAL METRICS
+# =========================
+
+winning_returns = results.loc[
+    results["strategy_return"] > 0,
+    "strategy_return"
+]
+
+losing_returns = results.loc[
+    results["strategy_return"] < 0,
+    "strategy_return"
+]
+
+best_day = results["strategy_return"].max()
+
+worst_day = results["strategy_return"].min()
+# =========================
+# AFTERNOON DATA
+# =========================
+
+afternoon = minute_bars[
+    (minute_bars["time"] >= pd.to_datetime("11:30").time()) &
+    (minute_bars["time"] < pd.to_datetime("16:00").time())
+].copy()
+
+
+# =========================
+# ENTRY PRICE
+# =========================
+
+entry_prices = (
+    afternoon[
+        afternoon["time"] == pd.to_datetime("11:30").time()
+    ]
+    .groupby("date")["open"]
+    .first()
+)
+
+results["entry_price"] = entry_prices
+
+
+# =========================
+# ACTUAL STOP-LOSS BACKTEST
+# =========================
+
+stop_levels = [
+    None,
+    0.0040,
+    0.0050,
+    0.0075,
+    0.0100
+]
+
+stop_results = []
+
+for stop in stop_levels:
+
+    trade_returns = []
+
+    for date, trade in results.iterrows():
+
+        day_data = afternoon[
+            afternoon["date"] == date
+        ].sort_values("timestamp")
+
+        if day_data.empty:
+            continue
+
+        position = trade["position"]
+        entry_price = trade["entry_price"]
+
+        exit_return = None
+
+        # No stop
+        if stop is None:
+
+            exit_price = day_data["close"].iloc[-1]
+
+            if position == 1:
+                exit_return = exit_price / entry_price - 1
+            else:
+                exit_return = entry_price / exit_price - 1
+
+        # With stop
+        else:
+
+            for _, minute in day_data.iterrows():
+
+                if position == 1:
+
+                    stop_price = entry_price * (1 - stop)
+
+                    if minute["low"] <= stop_price:
+                        exit_return = -stop
+                        break
+
+                else:
+
+                    stop_price = entry_price * (1 + stop)
+
+                    if minute["high"] >= stop_price:
+                        exit_return = -stop
+                        break
+
+            # Stop never hit
+            if exit_return is None:
+
+                exit_price = day_data["close"].iloc[-1]
+
+                if position == 1:
+                    exit_return = exit_price / entry_price - 1
+                else:
+                    exit_return = entry_price / exit_price - 1
+
+        trade_returns.append(exit_return)
+
+    trade_returns = pd.Series(trade_returns)
+
+    initial_capital = 10000
+
+    equity = (
+        initial_capital *
+        (1 + trade_returns).cumprod()
+    )
+
+    running_max = equity.cummax()
+
+    drawdown = (
+        equity / running_max - 1
+    )
+
+    final_value = equity.iloc[-1]
+
+    total_return = (
+        final_value / initial_capital - 1
+    )
+
+    win_rate = (
+        trade_returns > 0
+    ).mean()
+
+    average_win = trade_returns[
+        trade_returns > 0
+    ].mean()
+
+    average_loss = trade_returns[
+        trade_returns < 0
+    ].mean()
+
+    max_drawdown = drawdown.min()
+
+    daily_volatility = trade_returns.std()
+    average_return = trade_returns.mean()
+
+    sharpe_ratio = (
+        average_return / daily_volatility
+    ) * np.sqrt(252)
+
+    worst_day = trade_returns.min()
+
+    stop_results.append({
+        "stop": (
+            "No stop"
+            if stop is None
+            else f"{stop:.2%}"
+        ),
+        "final_value": final_value,
+        "total_return": total_return,
+        "win_rate": win_rate,
+        "average_win": average_win,
+        "average_loss": average_loss,
+        "max_drawdown": max_drawdown,
+        "worst_day": worst_day,
+        "sharpe": sharpe_ratio
+    })
+
+
+# =========================
+# PRINT RESULTS
+# =========================
+
+print("\n===== STOP-LOSS BACKTEST RESULTS =====")
+
+for result in stop_results:
+
+    print(f"\nStop-loss: {result['stop']}")
+
+    print(
+        f"Final value: "
+        f"${result['final_value']:,.2f}"
+    )
+
+    print(
+        f"Total return: "
+        f"{result['total_return']:.2%}"
+    )
+
+    print(
+        f"Win rate: "
+        f"{result['win_rate']:.2%}"
+    )
+
+    print(
+        f"Average win: "
+        f"{result['average_win']:.2%}"
+    )
+
+    print(
+        f"Average loss: "
+        f"{result['average_loss']:.2%}"
+    )
+
+    print(
+        f"Max drawdown: "
+        f"{result['max_drawdown']:.2%}"
+    )
+
+    print(
+        f"Worst day: "
+        f"{result['worst_day']:.2%}"
+    )
+
+    print(
+        f"Sharpe ratio: "
+        f"{result['sharpe']:.2f}"
+    )
+
+# =========================
+# PRINT RESULTS
+# =========================
 
 print("\n===== BACKTEST RESULTS =====")
 
-print("Total strategy return:",(results["strategy_value"].iloc[-1] / initial_capital - 1))
+print(
+    f"Final value: ${final_value:,.2f}"
+)
 
-print("Final strategy value:",results["strategy_value"].iloc[-1])
+print(
+    f"Total return: {total_return:.2%}"
+)
 
-print("Buy & hold return:",(results["buy_hold_value"].iloc[-1] / initial_capital - 1))
+print(
+    f"Trades: {len(results)}"
+)
 
-print("Final buy & hold value:",results["buy_hold_value"].iloc[-1])
+print(
+    f"Win rate: {win_rate:.2%}"
+)
 
-print("Number of trades:",len(results))
+print("\n===== RISK METRICS =====")
 
-print("Strategy win rate:",(results["strategy_return"] > 0).mean())
+print(
+    f"Max drawdown: {max_drawdown:.2%}"
+)
 
+print(
+    f"Average daily return: {average_daily_return:.4%}"
+)
 
+print(
+    f"Daily volatility: {daily_volatility:.4%}"
+)
+
+print(
+    f"Sharpe ratio: {sharpe_ratio:.2f}"
+)
+
+print("\n===== ADDITIONAL METRICS =====")
+
+print(
+    f"Average winning day: {winning_returns.mean():.4%}"
+)
+
+print(
+    f"Average losing day: {losing_returns.mean():.4%}"
+)
+
+print(
+    f"Best day: {best_day:.4%}"
+)
+
+print(
+    f"Worst day: {worst_day:.4%}"
+)
+
+print(
+    f"Winning days: {(results['strategy_return'] > 0).sum()}"
+)
+
+print(
+    f"Losing days: {(results['strategy_return'] < 0).sum()}"
+)
+# =========================
+# INTRADAY MOVEMENT ANALYSIS
+# =========================
+
+afternoon = minute_bars[
+    (minute_bars["time"] >= pd.to_datetime("11:30").time()) &
+    (minute_bars["time"] < pd.to_datetime("16:00").time())
+].copy()
+
+# Get the 11:30 entry price
+entry_prices = (
+    afternoon[afternoon["time"] == pd.to_datetime("11:30").time()]
+    .groupby("date")["open"]
+    .first()
+)
+
+# Get the highest and lowest price after entry
+afternoon_high = (
+    afternoon.groupby("date")["high"].max()
+)
+
+afternoon_low = (
+    afternoon.groupby("date")["low"].min()
+)
+
+# Add these to the results dataframe
+results["entry_price"] = entry_prices
+
+results["afternoon_high"] = afternoon_high
+results["afternoon_low"] = afternoon_low
+
+# =========================
+# MAX FAVORABLE / ADVERSE MOVEMENT
+# =========================
+
+# For a LONG:
+# favorable = price going UP
+# adverse = price going DOWN
+
+long_mfe = (
+    results["afternoon_high"] /
+    results["entry_price"] - 1
+)
+
+long_mae = (
+    results["afternoon_low"] /
+    results["entry_price"] - 1
+)
+
+# For a SHORT:
+# favorable = price going DOWN
+# adverse = price going UP
+
+short_mfe = (
+    results["entry_price"] /
+    results["afternoon_low"] - 1
+)
+
+short_mae = (
+    results["afternoon_high"] /
+    results["entry_price"] - 1
+)
+
+# Maximum favorable excursion
+results["mfe"] = np.where(
+    results["position"] == 1,
+    (results["afternoon_high"] / results["entry_price"]) - 1,
+    (results["entry_price"] / results["afternoon_low"]) - 1
+)
+
+# Maximum adverse excursion
+results["mae"] = np.where(
+    results["position"] == 1,
+    (results["afternoon_low"] / results["entry_price"]) - 1,
+    (results["entry_price"] / results["afternoon_high"]) - 1
+)
+
+winning_trades = results[
+    results["strategy_return"] > 0
+]
+
+losing_trades = results[
+    results["strategy_return"] < 0
+]
+
+print("\n===== INTRADAY MOVEMENT ANALYSIS =====")
+
+print("\nALL TRADES")
+
+print(
+    f"Average MFE: "
+    f"{results['mfe'].mean():.2%}"
+)
+
+print(
+    f"Average MAE: "
+    f"{results['mae'].mean():.2%}"
+)
+
+print("\nWINNING TRADES")
+
+print(
+    f"Average MFE: "
+    f"{winning_trades['mfe'].mean():.2%}"
+)
+
+print(
+    f"Average MAE: "
+    f"{winning_trades['mae'].mean():.2%}"
+)
+
+print("\nLOSING TRADES")
+
+print(
+    f"Average MFE: "
+    f"{losing_trades['mfe'].mean():.2%}"
+)
+
+print(
+    f"Average MAE: "
+    f"{losing_trades['mae'].mean():.2%}"
+)
+
+# =========================
+# STOP-LOSS ANALYSIS
+# =========================
+
+stop_levels = [
+    0.0010,   # 0.10%
+    0.0020,   # 0.20%
+    0.0025,   # 0.25%
+    0.0030,   # 0.30%
+    0.0040,   # 0.40%
+    0.0050,   # 0.50%
+    0.0075,   # 0.75%
+    0.0100,   # 1.00%
+    0.0150,   # 1.50%
+    0.0200    # 2.00%
+]
+
+print("\n===== STOP-LOSS ANALYSIS =====")
+
+for stop in stop_levels:
+
+    # A trade hits the stop if its MAE is
+    # worse than the stop level.
+    stopped_out = results["mae"] <= -stop
+
+    total_stopped = stopped_out.sum()
+
+    winning_stopped = (
+        stopped_out &
+        (results["strategy_return"] > 0)
+    ).sum()
+
+    losing_stopped = (
+        stopped_out &
+        (results["strategy_return"] < 0)
+    ).sum()
+
+    total_winners = (
+        results["strategy_return"] > 0
+    ).sum()
+
+    total_losers = (
+        results["strategy_return"] < 0
+    ).sum()
+
+    winner_stop_rate = (
+        winning_stopped / total_winners
+    )
+
+    loser_stop_rate = (
+        losing_stopped / total_losers
+    )
+
+    print(f"\nStop-loss: {stop:.2%}")
+
+    print(
+        f"Total trades stopped: "
+        f"{total_stopped} / {len(results)}"
+    )
+
+    print(
+        f"Winners stopped: "
+        f"{winning_stopped} / {total_winners} "
+        f"({winner_stop_rate:.2%})"
+    )
+
+    print(
+        f"Losers stopped: "
+        f"{losing_stopped} / {total_losers} "
+        f"({loser_stop_rate:.2%})"
+    )
+    
 print(results[["target_return","predicted_return"]].head(20))
 
 actual_direction = y_test > 0
